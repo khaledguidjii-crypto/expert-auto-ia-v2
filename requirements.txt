@@ -2,3 +2,4 @@ streamlit
 docxtpl
 openai
 Pillow
+python-docx
