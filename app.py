@@ -11,27 +11,19 @@ from openai import OpenAI
 
 st.set_page_config(page_title="Expert Auto IA", page_icon="🚗", layout="wide")
 
-# ====================== CONFIGURATION OPENAI SÉCURISÉE ======================
+# ====================== CONFIGURATION OPENAI ======================
 if "client" not in st.session_state:
     try:
-        # Pour Streamlit Cloud (recommandé pour la version en ligne)
         api_key = st.secrets["OPENAI_API_KEY"]
     except:
         try:
-            # Pour usage local avec ton config.py
             import config
             api_key = config.OPENAI_API_KEY
         except:
             api_key = os.getenv("OPENAI_API_KEY")
     
     if not api_key:
-        st.error("""
-        ❌ **Clé OpenAI non trouvée !**
-
-        **Solutions :**
-        - En local : vérifie ton fichier `config.py`
-        - En ligne (Streamlit Cloud) : ajoute la clé dans les Secrets
-        """)
+        st.error("❌ Clé OpenAI non trouvée ! Ajoute-la dans Streamlit Secrets.")
         st.stop()
     
     st.session_state.client = OpenAI(api_key=api_key)
@@ -105,7 +97,7 @@ def extract_carte_grise_protocol(carte_bytes):
 
 def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
     if not os.path.exists("modele.docx"):
-        st.error("❌ Le fichier modele.docx est introuvable !")
+        st.error("❌ modele.docx introuvable !")
         return None
 
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -142,8 +134,9 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
         return buffer
 
 # ====================== INTERFACE ======================
-st.title("🚗 Expert Auto IA - Version Web")
+st.title("🚗 Expert Auto IA")
 st.markdown("**Rapport d’expertise véhicule**")
+st.info("📱 **iPhone** : Utilise **Chrome** pour une meilleure compatibilité caméra")
 
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
@@ -155,27 +148,30 @@ images_bytes = {}
 for i, (key, label) in enumerate(zip(keys, labels)):
     with cols[i]:
         st.subheader(label)
-        tab1, tab2 = st.tabs(["📤 Uploader", "📸 Caméra"])
-        with tab1:
-            uploaded = st.file_uploader("Choisir photo", type=["jpg","jpeg","png"], key=f"up_{key}")
-        with tab2:
-            camera = st.camera_input("Prendre photo", key=f"cam_{key}")
+        
+        col_u, col_c = st.columns(2)
+        with col_u:
+            uploaded = st.file_uploader("📤 Uploader", type=["jpg","jpeg","png"], key=f"upload_{key}")
+        with col_c:
+            camera = st.camera_input("📸 Caméra", key=f"camera_{key}")
         
         current_bytes = None
         if camera is not None:
             current_bytes = camera.getvalue()
+            st.success("✅ Photo prise avec caméra")
         elif uploaded is not None:
             current_bytes = uploaded.getvalue()
+            st.success("✅ Photo uploadée")
         
         if current_bytes:
-            st.image(current_bytes, width=220)
+            st.image(current_bytes, width=200)
             images_bytes[key] = current_bytes
 
-st.header("📝 Informations")
+st.header("📝 Informations Complémentaires")
 col1, col2 = st.columns(2)
 with col1:
     nom = st.text_input("Nom propriétaire", "")
-    num_rapport = st.text_input("N° Rapport", "001")
+    num_rapport = st.text_input("Numéro rapport", "001")
     lieu = st.text_input("Lieu", "TISSEMSILT")
 with col2:
     date_exp = st.text_input("Date expertise", "26/04/2026")
@@ -191,28 +187,25 @@ infos = {
     "carburant": carburant
 }
 
-if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_width=True):
+if st.button("🚀 ANALYSER AVEC IA ET GÉNÉRER RAPPORT", type="primary", use_container_width=True):
     if not images_bytes.get("carte"):
-        st.error("❌ Carte grise obligatoire !")
+        st.error("❌ La Carte Grise est obligatoire !")
     else:
-        with st.spinner("Analyse IA en cours..."):
+        with st.spinner("Analyse en cours avec GPT-4o-mini..."):
             cg_data = extract_carte_grise_protocol(images_bytes["carte"])
-            vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
-            poids = extract_plaque_poids(images_bytes.get("plaque"))
+            vin_complet = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
+            poids_plaque = extract_plaque_poids(images_bytes.get("plaque"))
             
-            buffer = generate_report(cg_data, vin, poids, infos, images_bytes)
+            buffer = generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes)
 
         if buffer:
             st.success("✅ Rapport généré avec succès !")
             st.download_button(
-                "📥 Télécharger le rapport Word",
+                label="📥 Télécharger le rapport Word",
                 data=buffer,
                 file_name=f"rapport_{num_rapport}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True
             )
-            with st.expander("📜 Log d'exécution"):
-                for log in st.session_state.get("logs", []):
-                    st.write(log)
 
-st.caption("💡 Sur téléphone : utilise l’onglet **Caméra**")
+st.caption("💡 Sur iPhone : essaie avec Google Chrome si la caméra ne fonctionne pas")
