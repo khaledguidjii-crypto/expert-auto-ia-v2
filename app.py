@@ -12,7 +12,7 @@ from PIL import Image
 
 st.set_page_config(page_title="Expert Auto IA", page_icon="🚗", layout="wide")
 
-# ====================== CONFIGURATION ======================
+# ====================== CONFIG ======================
 if "client" not in st.session_state:
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
@@ -41,7 +41,7 @@ def compress_image(image_bytes, max_size=900, quality=75):
     except:
         return image_bytes
 
-# ====================== FONCTIONS EXTRACTION ======================
+# ====================== EXTRACTION ======================
 def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
     sources = [("VIN gravé", vin_bytes), ("Plaque", plaque_bytes)]
     for name, img_bytes in sources:
@@ -49,7 +49,7 @@ def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
         try:
             img_b64 = base64.b64encode(img_bytes).decode()
             res = client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-4o",
                 messages=[{"role": "user", "content": [
                     {"type": "text", "text": "Retourne UNIQUEMENT le VIN complet de 17 caractères. Rien d'autre."},
                     {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
@@ -62,46 +62,31 @@ def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
     return ""
 
 def extract_plaque_poids(plaque_bytes):
-    if not plaque_bytes: return {"ptac": "Non disponible", "ptra": "Non disponible"}
+    if not plaque_bytes: return {"ptac": "", "ptra": ""}
     try:
         img_b64 = base64.b64encode(plaque_bytes).decode()
-        prompt = "Analyse cette plaque métallique. Retourne UNIQUEMENT JSON : {\"ptac\": \"XXXX\", \"ptra\": \"XXXX\"}"
-        res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": [
+        prompt = "Lis les poids sur cette plaque métallique (PTAC et PTRA). Retourne UNIQUEMENT JSON : {\"ptac\": \"XXXX\", \"ptra\": \"XXXX\"}"
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": [
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
         ]}])
         text = res.choices[0].message.content.replace("```json","").replace("```","").strip()
         data = json.loads(text)
         return {
-            "ptac": re.sub(r'[^0-9]', '', str(data.get("ptac", ""))) or "Non disponible",
-            "ptra": re.sub(r'[^0-9]', '', str(data.get("ptra", ""))) or "Non disponible"
+            "ptac": re.sub(r'[^0-9]', '', str(data.get("ptac", ""))),
+            "ptra": re.sub(r'[^0-9]', '', str(data.get("ptra", "")))
         }
     except:
-        return {"ptac": "Non disponible", "ptra": "Non disponible"}
+        return {"ptac": "", "ptra": ""}
 
 def extract_carte_grise_protocol(carte_bytes):
-    st.info("🔍 Lecture de la carte grise avec GPT-4o...")
     try:
         img_b64 = base64.b64encode(carte_bytes).decode()
-        prompt = """
-        Tu es un expert en cartes grises algériennes. Analyse cette image et retourne UNIQUEMENT un JSON avec :
-        - marque
-        - Genre
-        - type
-        - carrosserie
-        - immatriculation
-        - date_premiere_circulation
-        - puissance_administrative
-        - nombre_places_assises
-        """
-        res = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]}],
-            temperature=0.1
-        )
+        prompt = "Analyse cette carte grise algérienne et retourne UNIQUEMENT un JSON avec : marque, Genre, type, carrosserie, immatriculation, date_premiere_circulation, puissance_administrative, nombre_places_assises"
+        res = client.chat.completions.create(model="gpt-4o", messages=[{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+        ]}])
         text = res.choices[0].message.content.replace("```json","").replace("```","").strip()
         return json.loads(text)
     except:
@@ -115,6 +100,7 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
     with tempfile.TemporaryDirectory() as tmpdir:
         doc = DocxTemplate("modele.docx")
 
+        # VIN
         if vin_complet and len(vin_complet) == 17:
             cg_data["vin_complet"] = vin_complet
             cg_data["vin_9"] = vin_complet[:9]
@@ -124,14 +110,18 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
             cg_data["vin_9"] = cg_data.get("vin_9", "Non disponible")
             cg_data["vin_8"] = cg_data.get("vin_8", "Non disponible")
 
-        cg_data["ptac"] = poids_plaque.get("ptac", "1500") if str(poids_plaque.get("ptac","")) != "Non disponible" else "1500"
-        cg_data["ptra"] = poids_plaque.get("ptra", "2300") if str(poids_plaque.get("ptra","")) != "Non disponible" else "2300"
+        # Poids
+        ptac_manual = cg_data.get("ptac_manual", "")
+        ptra_manual = cg_data.get("ptra_manual", "")
+        cg_data["ptac"] = ptac_manual if ptac_manual else (poids_plaque.get("ptac") or "1500")
+        cg_data["ptra"] = ptra_manual if ptra_manual else (poids_plaque.get("ptra") or "2300")
 
         # Variables courtes
         cg_data["puiss_cv"] = cg_data.get("puissance_administrative", "")
         cg_data["nb_places"] = cg_data.get("nombre_places_assises", "")
 
-        defaults = {"nb_cylindres": "4", "cylindree": "1400", "boite_vitesse": "Manuelle", "poids_vide": "1100", "charge_utile": "400"}
+        defaults = {"nb_cylindres": "4", "cylindree": "1400", "boite_vitesse": "Manuelle", 
+                   "poids_vide": "1100", "charge_utile": "400"}
         for k, v in defaults.items():
             if k not in cg_data or not cg_data.get(k):
                 cg_data[k] = v
@@ -156,6 +146,7 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
 st.title("🚗 Expert Auto IA - Version Robuste")
 st.markdown("**Rapport d’expertise véhicule**")
 
+# Photos
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
 keys = ["carte", "vin", "plaque", "vehicule"]
@@ -166,14 +157,15 @@ images_bytes = {}
 for i, (key, label) in enumerate(zip(keys, labels)):
     with cols[i]:
         st.subheader(label)
-        uploaded = st.file_uploader("Choisir ou prendre photo", type=["jpg","jpeg","png"], key=f"up_{key}")
-        if uploaded is not None:
+        uploaded = st.file_uploader("Choisir photo", type=["jpg","jpeg","png"], key=f"up_{key}")
+        if uploaded:
             compressed = compress_image(uploaded.getvalue())
             st.image(compressed, width=220)
             images_bytes[key] = compressed
 
-# Données extraites (modifiables)
-st.header("📝 Données extraites (modifiable)")
+# === DONNÉES MODIFIABLES ===
+st.header("📝 Données extraites (corrigez si nécessaire)")
+
 cg_data = {}
 if images_bytes.get("carte"):
     cg_data = extract_carte_grise_protocol(images_bytes["carte"])
@@ -184,19 +176,25 @@ with col1:
     genre = st.text_input("Genre", value=cg_data.get("Genre", ""))
     type_veh = st.text_input("Type", value=cg_data.get("type", ""))
     carrosserie = st.text_input("Carrosserie", value=cg_data.get("carrosserie", ""))
+    vin_manual = st.text_input("VIN (17 caractères)", value="")
 with col2:
     immat = st.text_input("Immatriculation", value=cg_data.get("immatriculation", ""))
     date_circ = st.text_input("Date 1ère circulation", value=cg_data.get("date_premiere_circulation", ""))
     puiss = st.text_input("Puissance (CV)", value=cg_data.get("puissance_administrative", ""))
     places = st.text_input("Nb Places", value=cg_data.get("nombre_places_assises", ""))
+    ptac_manual = st.text_input("PTAC (kg)", value="")
+    ptra_manual = st.text_input("PTRA (kg)", value="")
 
 cg_data.update({
     "marque": marque, "Genre": genre, "type": type_veh, "carrosserie": carrosserie,
     "immatriculation": immat, "date_premiere_circulation": date_circ,
-    "puissance_administrative": puiss, "nombre_places_assises": places
+    "puissance_administrative": puiss, "nombre_places_assises": places,
+    "vin_complet": vin_manual,
+    "ptac_manual": ptac_manual,
+    "ptra_manual": ptra_manual
 })
 
-# Informations manuelles
+# Informations
 st.header("📝 Informations Complémentaires")
 col1, col2 = st.columns(2)
 with col1:
@@ -208,32 +206,21 @@ with col2:
     couleur = st.text_input("Couleur", "")
     carburant = st.text_input("Carburant", "Essence")
 
-infos = {
-    "nom_proprietaire": nom,
-    "num_rapport": num_rapport,
-    "lieu": lieu,
-    "date_expertise": date_exp,
-    "couleur": couleur,
-    "carburant": carburant
-}
+infos = {"nom_proprietaire": nom, "num_rapport": num_rapport, "lieu": lieu,
+         "date_expertise": date_exp, "couleur": couleur, "carburant": carburant}
 
-if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_width=True):
+if st.button("🚀 GÉNÉRER RAPPORT", type="primary", use_container_width=True):
     if not images_bytes.get("carte"):
         st.error("❌ Carte grise obligatoire !")
     else:
         with st.spinner("Génération du rapport..."):
-            vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
+            vin = vin_manual if vin_manual else extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
             poids = extract_plaque_poids(images_bytes.get("plaque"))
+            
             buffer = generate_report(cg_data, vin, poids, infos, images_bytes)
 
         if buffer:
-            st.success("✅ Rapport généré !")
-            st.download_button(
-                "📥 Télécharger le rapport Word",
-                data=buffer,
-                file_name=f"rapport_{num_rapport}.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                use_container_width=True
-            )
+            st.success("✅ Rapport généré avec succès !")
+            st.download_button("📥 Télécharger Rapport", data=buffer, file_name=f"rapport_{num_rapport}.docx", use_container_width=True)
 
-st.caption("Version améliorée - Données modifiables manuellement")
+st.caption("Version robuste - Tous les champs critiques sont modifiables manuellement")
