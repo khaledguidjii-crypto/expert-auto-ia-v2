@@ -30,45 +30,16 @@ if "client" not in st.session_state:
 
 client = st.session_state.client
 
-# ====================== COMPRESSION FORTE (style WhatsApp) ======================
-def compress_image(image_bytes, max_size=800, quality=72):
-    """Compression forte comme WhatsApp"""
+# ====================== COMPRESSION FORTE ======================
+def compress_image(image_bytes, max_size=800, quality=70):
     try:
         img = Image.open(BytesIO(image_bytes))
-        
-        # Rotation si besoin (photos de téléphone)
-        if hasattr(img, '_getexif') and img._getexif():
-            exif = img._getexif()
-            if exif and 274 in exif:
-                orientation = exif[274]
-                if orientation == 3:
-                    img = img.rotate(180, expand=True)
-                elif orientation == 6:
-                    img = img.rotate(270, expand=True)
-                elif orientation == 8:
-                    img = img.rotate(90, expand=True)
-        
-        # Réduction forte de taille
         img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
-        
         output = BytesIO()
-        img.save(output, 
-                format="JPEG", 
-                quality=quality, 
-                optimize=True, 
-                progressive=True)
-        
-        compressed = output.getvalue()
-        
-        # Si encore trop gros → on force encore plus
-        if len(compressed) > 450000:  # 450 KB
-            output = BytesIO()
-            img.save(output, format="JPEG", quality=65, optimize=True)
-            compressed = output.getvalue()
-        
-        return compressed
+        img.save(output, format="JPEG", quality=quality, optimize=True)
+        return output.getvalue()
     except:
-        return image_bytes  # En cas d'erreur, on garde l'original
+        return image_bytes
 
 # ====================== FONCTIONS EXTRACTION ======================
 def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
@@ -130,6 +101,7 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
     with tempfile.TemporaryDirectory() as tmpdir:
         doc = DocxTemplate("modele.docx")
 
+        # VIN
         if vin_complet and len(vin_complet) == 17:
             cg_data["vin_complet"] = vin_complet
             cg_data["vin_9"] = vin_complet[:9]
@@ -137,9 +109,15 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
         else:
             cg_data["vin_complet"] = cg_data["vin_9"] = cg_data["vin_8"] = "Non disponible"
 
+        # Poids
         cg_data["ptac"] = poids_plaque.get("ptac", "1500") if str(poids_plaque.get("ptac","")) != "Non disponible" else "1500"
         cg_data["ptra"] = poids_plaque.get("ptra", "2300") if str(poids_plaque.get("ptra","")) != "Non disponible" else "2300"
 
+        # Variables courtes pour ton template
+        cg_data["puiss_cv"] = cg_data.get("puissance_administrative", "")
+        cg_data["nb_places"] = cg_data.get("nombre_places_assises", "")
+
+        # Valeurs par défaut
         defaults = {"nb_cylindres": "4", "cylindree": "1400", "boite_vitesse": "Manuelle", "poids_vide": "1100", "charge_utile": "400"}
         for k, v in defaults.items():
             if k not in cg_data or not cg_data.get(k):
@@ -147,9 +125,10 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
 
         final = {**cg_data, **infos}
 
+        # Images compressées
         for key, img_bytes in images_bytes.items():
             if img_bytes:
-                compressed = compress_image(img_bytes, max_size=800, quality=72)
+                compressed = compress_image(img_bytes)
                 path = os.path.join(tmpdir, f"{key}.jpg")
                 with open(path, "wb") as f:
                     f.write(compressed)
@@ -164,7 +143,7 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
 # ====================== INTERFACE ======================
 st.title("🚗 Expert Auto IA")
 st.markdown("**Rapport d’expertise véhicule**")
-st.success("📸 Photos compressées automatiquement (style WhatsApp)")
+st.success("📸 Photos compressées + Variables courtes")
 
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
@@ -179,10 +158,10 @@ for i, (key, label) in enumerate(zip(keys, labels)):
         uploaded = st.file_uploader("Choisir ou prendre photo", type=["jpg","jpeg","png"], key=f"up_{key}")
         
         if uploaded is not None:
-            compressed_bytes = compress_image(uploaded.getvalue())
-            st.image(compressed_bytes, width=220)
-            images_bytes[key] = compressed_bytes
-            st.caption(f"✅ Compressé ({len(compressed_bytes)//1024} KB)")
+            compressed = compress_image(uploaded.getvalue())
+            st.image(compressed, width=220)
+            images_bytes[key] = compressed
+            st.caption(f"✅ {len(compressed)//1024} KB")
 
 st.header("📝 Informations")
 col1, col2 = st.columns(2)
@@ -208,7 +187,7 @@ if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_
     if not images_bytes.get("carte"):
         st.error("❌ Carte grise obligatoire !")
     else:
-        with st.spinner("Compression + Analyse IA en cours..."):
+        with st.spinner("Compression + Analyse IA..."):
             cg_data = extract_carte_grise_protocol(images_bytes["carte"])
             vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
             poids = extract_plaque_poids(images_bytes.get("plaque"))
@@ -225,4 +204,4 @@ if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_
                 use_container_width=True
             )
 
-st.caption("Photos compressées comme WhatsApp (environ 200-400 KB)")
+st.caption("Version optimisée - Variables courtes + Compression photos")
