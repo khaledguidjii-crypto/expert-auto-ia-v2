@@ -8,7 +8,7 @@ import tempfile
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from openai import OpenAI
-from PIL import Image  # ← Ajout pour compresser les images
+from PIL import Image
 
 st.set_page_config(page_title="Expert Auto IA", page_icon="🚗", layout="wide")
 
@@ -30,21 +30,47 @@ if "client" not in st.session_state:
 
 client = st.session_state.client
 
-# ====================== FONCTION POUR RÉDUIRE LA TAILLE ======================
-def compress_image(image_bytes, max_size=1000, quality=85):
-    """Réduit la taille des photos automatiquement"""
+# ====================== COMPRESSION FORTE (style WhatsApp) ======================
+def compress_image(image_bytes, max_size=800, quality=72):
+    """Compression forte comme WhatsApp"""
     try:
         img = Image.open(BytesIO(image_bytes))
-        # Garder les proportions
+        
+        # Rotation si besoin (photos de téléphone)
+        if hasattr(img, '_getexif') and img._getexif():
+            exif = img._getexif()
+            if exif and 274 in exif:
+                orientation = exif[274]
+                if orientation == 3:
+                    img = img.rotate(180, expand=True)
+                elif orientation == 6:
+                    img = img.rotate(270, expand=True)
+                elif orientation == 8:
+                    img = img.rotate(90, expand=True)
+        
+        # Réduction forte de taille
         img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
         
         output = BytesIO()
-        img.save(output, format="JPEG", quality=quality, optimize=True)
-        return output.getvalue()
+        img.save(output, 
+                format="JPEG", 
+                quality=quality, 
+                optimize=True, 
+                progressive=True)
+        
+        compressed = output.getvalue()
+        
+        # Si encore trop gros → on force encore plus
+        if len(compressed) > 450000:  # 450 KB
+            output = BytesIO()
+            img.save(output, format="JPEG", quality=65, optimize=True)
+            compressed = output.getvalue()
+        
+        return compressed
     except:
-        return image_bytes  # Si erreur, on garde l'original
+        return image_bytes  # En cas d'erreur, on garde l'original
 
-# ====================== FONCTIONS (identiques) ======================
+# ====================== FONCTIONS EXTRACTION ======================
 def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
     sources = [("VIN gravé", vin_bytes), ("Plaque", plaque_bytes)]
     for name, img_bytes in sources:
@@ -123,8 +149,7 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
 
         for key, img_bytes in images_bytes.items():
             if img_bytes:
-                # Compression avant d'ajouter au Word
-                compressed = compress_image(img_bytes, max_size=1000, quality=85)
+                compressed = compress_image(img_bytes, max_size=800, quality=72)
                 path = os.path.join(tmpdir, f"{key}.jpg")
                 with open(path, "wb") as f:
                     f.write(compressed)
@@ -139,7 +164,7 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
 # ====================== INTERFACE ======================
 st.title("🚗 Expert Auto IA")
 st.markdown("**Rapport d’expertise véhicule**")
-st.success("📸 Photos automatiquement compressées (plus rapide)")
+st.success("📸 Photos compressées automatiquement (style WhatsApp)")
 
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
@@ -154,10 +179,10 @@ for i, (key, label) in enumerate(zip(keys, labels)):
         uploaded = st.file_uploader("Choisir ou prendre photo", type=["jpg","jpeg","png"], key=f"up_{key}")
         
         if uploaded is not None:
-            # Compression immédiate
             compressed_bytes = compress_image(uploaded.getvalue())
             st.image(compressed_bytes, width=220)
             images_bytes[key] = compressed_bytes
+            st.caption(f"✅ Compressé ({len(compressed_bytes)//1024} KB)")
 
 st.header("📝 Informations")
 col1, col2 = st.columns(2)
@@ -170,14 +195,20 @@ with col2:
     couleur = st.text_input("Couleur", "")
     carburant = st.text_input("Carburant", "Essence")
 
-infos = {"nom_proprietaire": nom, "num_rapport": num_rapport, "lieu": lieu,
-         "date_expertise": date_exp, "couleur": couleur, "carburant": carburant}
+infos = {
+    "nom_proprietaire": nom,
+    "num_rapport": num_rapport,
+    "lieu": lieu,
+    "date_expertise": date_exp,
+    "couleur": couleur,
+    "carburant": carburant
+}
 
 if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_width=True):
     if not images_bytes.get("carte"):
         st.error("❌ Carte grise obligatoire !")
     else:
-        with st.spinner("Analyse IA + compression des photos..."):
+        with st.spinner("Compression + Analyse IA en cours..."):
             cg_data = extract_carte_grise_protocol(images_bytes["carte"])
             vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
             poids = extract_plaque_poids(images_bytes.get("plaque"))
@@ -194,4 +225,4 @@ if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_
                 use_container_width=True
             )
 
-st.caption("Version optimisée : Photos compressées automatiquement")
+st.caption("Photos compressées comme WhatsApp (environ 200-400 KB)")
