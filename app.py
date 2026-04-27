@@ -30,8 +30,8 @@ if "client" not in st.session_state:
 
 client = st.session_state.client
 
-# ====================== COMPRESSION FORTE ======================
-def compress_image(image_bytes, max_size=800, quality=70):
+# ====================== COMPRESSION ======================
+def compress_image(image_bytes, max_size=900, quality=75):
     try:
         img = Image.open(BytesIO(image_bytes))
         img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
@@ -41,56 +41,40 @@ def compress_image(image_bytes, max_size=800, quality=70):
     except:
         return image_bytes
 
-# ====================== FONCTIONS EXTRACTION ======================
-def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
-    sources = [("VIN gravé", vin_bytes), ("Plaque", plaque_bytes)]
-    for name, img_bytes in sources:
-        if not img_bytes: continue
-        try:
-            img_b64 = base64.b64encode(img_bytes).decode()
-            res = client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": [
-                    {"type": "text", "text": "Retourne UNIQUEMENT le VIN complet de 17 caractères. Rien d'autre."},
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-                ]}]
-            )
-            clean = re.sub(r'[^A-Z0-9]', '', res.choices[0].message.content.strip().upper())
-            if len(clean) == 17:
-                return clean
-        except: pass
-    return ""
-
-def extract_plaque_poids(plaque_bytes):
-    if not plaque_bytes: return {"ptac": "Non disponible", "ptra": "Non disponible"}
-    try:
-        img_b64 = base64.b64encode(plaque_bytes).decode()
-        prompt = "Analyse cette plaque métallique. Retourne UNIQUEMENT JSON : {\"ptac\": \"XXXX\", \"ptra\": \"XXXX\"}"
-        res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-        ]}])
-        text = res.choices[0].message.content.replace("```json","").replace("```","").strip()
-        data = json.loads(text)
-        return {
-            "ptac": re.sub(r'[^0-9]', '', str(data.get("ptac", ""))) or "Non disponible",
-            "ptra": re.sub(r'[^0-9]', '', str(data.get("ptra", ""))) or "Non disponible"
-        }
-    except:
-        return {"ptac": "Non disponible", "ptra": "Non disponible"}
-
+# ====================== EXTRACTION AMÉLIORÉE ======================
 def extract_carte_grise_protocol(carte_bytes):
+    st.info("🔍 Lecture de la carte grise avec GPT-4o (plus précis)...")
     try:
         img_b64 = base64.b64encode(carte_bytes).decode()
-        prompt = """Lis cette carte grise algérienne. Retourne UNIQUEMENT ce JSON :
-        {"marque": "", "Genre": "", "type": "", "carrosserie": "", "immatriculation": "", "date_premiere_circulation": "", "puissance_administrative": "", "nombre_places_assises": ""}"""
-        res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": [
-            {"type": "text", "text": prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-        ]}])
+        prompt = """
+        Tu es un expert en cartes grises algériennes. Analyse cette image avec attention et retourne UNIQUEMENT un JSON valide.
+
+        Champs à extraire :
+        - marque (ex: RENAULT)
+        - Genre (VP, VL, etc.)
+        - type (le code complet du type)
+        - carrosserie (CI, BERLINE, etc.)
+        - immatriculation
+        - date_premiere_circulation (l'année)
+        - puissance_administrative (le nombre seulement)
+        - nombre_places_assises (le nombre seulement)
+
+        Retourne uniquement le JSON.
+        """
+        res = client.chat.completions.create(
+            model="gpt-4o",           # Plus précis que gpt-4o-mini
+            messages=[{"role": "user", "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+            ]}],
+            temperature=0.1
+        )
         text = res.choices[0].message.content.replace("```json","").replace("```","").strip()
-        return json.loads(text)
-    except:
+        data = json.loads(text)
+        st.success("✅ Carte grise lue avec succès")
+        return data
+    except Exception as e:
+        st.error(f"Erreur lecture : {e}")
         return {}
 
 def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
@@ -107,7 +91,9 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
             cg_data["vin_9"] = vin_complet[:9]
             cg_data["vin_8"] = vin_complet[9:]
         else:
-            cg_data["vin_complet"] = cg_data["vin_9"] = cg_data["vin_8"] = "Non disponible"
+            cg_data["vin_complet"] = cg_data.get("vin_complet", "Non disponible")
+            cg_data["vin_9"] = cg_data.get("vin_9", "Non disponible")
+            cg_data["vin_8"] = cg_data.get("vin_8", "Non disponible")
 
         # Poids
         cg_data["ptac"] = poids_plaque.get("ptac", "1500") if str(poids_plaque.get("ptac","")) != "Non disponible" else "1500"
@@ -118,14 +104,15 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
         cg_data["nb_places"] = cg_data.get("nombre_places_assises", "")
 
         # Valeurs par défaut
-        defaults = {"nb_cylindres": "4", "cylindree": "1400", "boite_vitesse": "Manuelle", "poids_vide": "1100", "charge_utile": "400"}
+        defaults = {"nb_cylindres": "4", "cylindree": "1400", "boite_vitesse": "Manuelle", 
+                   "poids_vide": "1100", "charge_utile": "400"}
         for k, v in defaults.items():
             if k not in cg_data or not cg_data.get(k):
                 cg_data[k] = v
 
         final = {**cg_data, **infos}
 
-        # Images compressées
+        # Images
         for key, img_bytes in images_bytes.items():
             if img_bytes:
                 compressed = compress_image(img_bytes)
@@ -141,9 +128,8 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
         return buffer
 
 # ====================== INTERFACE ======================
-st.title("🚗 Expert Auto IA")
+st.title("🚗 Expert Auto IA - Version Robuste")
 st.markdown("**Rapport d’expertise véhicule**")
-st.success("📸 Photos compressées + Variables courtes")
 
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
@@ -161,9 +147,33 @@ for i, (key, label) in enumerate(zip(keys, labels)):
             compressed = compress_image(uploaded.getvalue())
             st.image(compressed, width=220)
             images_bytes[key] = compressed
-            st.caption(f"✅ {len(compressed)//1024} KB")
 
-st.header("📝 Informations")
+# ====================== DONNÉES EXTRAITES (modifiable) ======================
+st.header("📝 Données extraites (vous pouvez modifier)")
+
+if images_bytes.get("carte"):
+    cg_data = extract_carte_grise_protocol(images_bytes["carte"])
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        marque = st.text_input("Marque", value=cg_data.get("marque", ""))
+        genre = st.text_input("Genre", value=cg_data.get("Genre", ""))
+        type_veh = st.text_input("Type", value=cg_data.get("type", ""))
+        carrosserie = st.text_input("Carrosserie", value=cg_data.get("carrosserie", ""))
+    with col2:
+        immat = st.text_input("Immatriculation", value=cg_data.get("immatriculation", ""))
+        date_circ = st.text_input("Date 1ère circulation", value=cg_data.get("date_premiere_circulation", ""))
+        puiss = st.text_input("Puissance (CV)", value=cg_data.get("puissance_administrative", ""))
+        places = st.text_input("Nombre de places", value=cg_data.get("nombre_places_assises", ""))
+
+    cg_data = {
+        "marque": marque, "Genre": genre, "type": type_veh, "carrosserie": carrosserie,
+        "immatriculation": immat, "date_premiere_circulation": date_circ,
+        "puissance_administrative": puiss, "nombre_places_assises": places
+    }
+
+# Informations manuelles
+st.header("📝 Informations Complémentaires")
 col1, col2 = st.columns(2)
 with col1:
     nom = st.text_input("Nom propriétaire", "")
@@ -183,12 +193,12 @@ infos = {
     "carburant": carburant
 }
 
+# Bouton génération
 if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_width=True):
     if not images_bytes.get("carte"):
         st.error("❌ Carte grise obligatoire !")
     else:
-        with st.spinner("Compression + Analyse IA..."):
-            cg_data = extract_carte_grise_protocol(images_bytes["carte"])
+        with st.spinner("Génération du rapport..."):
             vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
             poids = extract_plaque_poids(images_bytes.get("plaque"))
             
@@ -204,4 +214,4 @@ if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_
                 use_container_width=True
             )
 
-st.caption("Version optimisée - Variables courtes + Compression photos")
+st.caption("Version améliorée - Vous pouvez modifier les données après extraction")
