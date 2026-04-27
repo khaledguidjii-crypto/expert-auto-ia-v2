@@ -8,10 +8,11 @@ import tempfile
 from docxtpl import DocxTemplate, InlineImage
 from docx.shared import Mm
 from openai import OpenAI
+from PIL import Image  # ← Ajout pour compresser les images
 
 st.set_page_config(page_title="Expert Auto IA", page_icon="🚗", layout="wide")
 
-# ====================== CONFIGURATION OPENAI ======================
+# ====================== CONFIGURATION ======================
 if "client" not in st.session_state:
     try:
         api_key = st.secrets["OPENAI_API_KEY"]
@@ -29,12 +30,21 @@ if "client" not in st.session_state:
 
 client = st.session_state.client
 
-# ====================== FONCTIONS (identiques) ======================
-def log_msg(msg):
-    if "logs" not in st.session_state:
-        st.session_state.logs = []
-    st.session_state.logs.append(msg)
+# ====================== FONCTION POUR RÉDUIRE LA TAILLE ======================
+def compress_image(image_bytes, max_size=1000, quality=85):
+    """Réduit la taille des photos automatiquement"""
+    try:
+        img = Image.open(BytesIO(image_bytes))
+        # Garder les proportions
+        img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+        
+        output = BytesIO()
+        img.save(output, format="JPEG", quality=quality, optimize=True)
+        return output.getvalue()
+    except:
+        return image_bytes  # Si erreur, on garde l'original
 
+# ====================== FONCTIONS (identiques) ======================
 def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
     sources = [("VIN gravé", vin_bytes), ("Plaque", plaque_bytes)]
     for name, img_bytes in sources:
@@ -50,10 +60,8 @@ def extract_vin_protocol(vin_bytes=None, plaque_bytes=None):
             )
             clean = re.sub(r'[^A-Z0-9]', '', res.choices[0].message.content.strip().upper())
             if len(clean) == 17:
-                log_msg(f"✅ VIN trouvé : {clean}")
                 return clean
         except: pass
-    log_msg("❌ Aucun VIN valide trouvé")
     return ""
 
 def extract_plaque_poids(plaque_bytes):
@@ -61,13 +69,10 @@ def extract_plaque_poids(plaque_bytes):
     try:
         img_b64 = base64.b64encode(plaque_bytes).decode()
         prompt = "Analyse cette plaque métallique. Retourne UNIQUEMENT JSON : {\"ptac\": \"XXXX\", \"ptra\": \"XXXX\"}"
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]}]
-        )
+        res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+        ]}])
         text = res.choices[0].message.content.replace("```json","").replace("```","").strip()
         data = json.loads(text)
         return {
@@ -82,13 +87,10 @@ def extract_carte_grise_protocol(carte_bytes):
         img_b64 = base64.b64encode(carte_bytes).decode()
         prompt = """Lis cette carte grise algérienne. Retourne UNIQUEMENT ce JSON :
         {"marque": "", "Genre": "", "type": "", "carrosserie": "", "immatriculation": "", "date_premiere_circulation": "", "puissance_administrative": "", "nombre_places_assises": ""}"""
-        res = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
-            ]}]
-        )
+        res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}}
+        ]}])
         text = res.choices[0].message.content.replace("```json","").replace("```","").strip()
         return json.loads(text)
     except:
@@ -121,9 +123,11 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
 
         for key, img_bytes in images_bytes.items():
             if img_bytes:
+                # Compression avant d'ajouter au Word
+                compressed = compress_image(img_bytes, max_size=1000, quality=85)
                 path = os.path.join(tmpdir, f"{key}.jpg")
                 with open(path, "wb") as f:
-                    f.write(img_bytes)
+                    f.write(compressed)
                 final[f"img_{key}"] = InlineImage(doc, path, height=Mm(45))
 
         doc.render(final)
@@ -132,11 +136,10 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
         buffer.seek(0)
         return buffer
 
-# ====================== INTERFACE SIMPLIFIÉE (Mobile Friendly) ======================
+# ====================== INTERFACE ======================
 st.title("🚗 Expert Auto IA")
 st.markdown("**Rapport d’expertise véhicule**")
-
-st.info("📱 Sur téléphone : Appuie sur **Uploader** → tu auras le choix **Appareil photo** ou **Galerie**")
+st.success("📸 Photos automatiquement compressées (plus rapide)")
 
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
@@ -151,9 +154,10 @@ for i, (key, label) in enumerate(zip(keys, labels)):
         uploaded = st.file_uploader("Choisir ou prendre photo", type=["jpg","jpeg","png"], key=f"up_{key}")
         
         if uploaded is not None:
-            current_bytes = uploaded.getvalue()
-            st.image(current_bytes, width=220)
-            images_bytes[key] = current_bytes
+            # Compression immédiate
+            compressed_bytes = compress_image(uploaded.getvalue())
+            st.image(compressed_bytes, width=220)
+            images_bytes[key] = compressed_bytes
 
 st.header("📝 Informations")
 col1, col2 = st.columns(2)
@@ -166,20 +170,14 @@ with col2:
     couleur = st.text_input("Couleur", "")
     carburant = st.text_input("Carburant", "Essence")
 
-infos = {
-    "nom_proprietaire": nom,
-    "num_rapport": num_rapport,
-    "lieu": lieu,
-    "date_expertise": date_exp,
-    "couleur": couleur,
-    "carburant": carburant
-}
+infos = {"nom_proprietaire": nom, "num_rapport": num_rapport, "lieu": lieu,
+         "date_expertise": date_exp, "couleur": couleur, "carburant": carburant}
 
 if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_width=True):
     if not images_bytes.get("carte"):
         st.error("❌ Carte grise obligatoire !")
     else:
-        with st.spinner("Analyse IA en cours..."):
+        with st.spinner("Analyse IA + compression des photos..."):
             cg_data = extract_carte_grise_protocol(images_bytes["carte"])
             vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
             poids = extract_plaque_poids(images_bytes.get("plaque"))
@@ -196,4 +194,4 @@ if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_
                 use_container_width=True
             )
 
-st.caption("Version optimisée mobile - Appuie sur Uploader pour choisir Appareil Photo ou Galerie")
+st.caption("Version optimisée : Photos compressées automatiquement")
