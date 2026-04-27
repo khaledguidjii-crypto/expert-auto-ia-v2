@@ -23,14 +23,13 @@ if "client" not in st.session_state:
             api_key = os.getenv("OPENAI_API_KEY")
     
     if not api_key:
-        st.error("❌ Clé OpenAI non trouvée ! Ajoute-la dans Streamlit Secrets.")
+        st.error("❌ Clé OpenAI non trouvée !")
         st.stop()
-    
     st.session_state.client = OpenAI(api_key=api_key)
 
 client = st.session_state.client
 
-# ====================== FONCTIONS ======================
+# ====================== FONCTIONS (identiques) ======================
 def log_msg(msg):
     if "logs" not in st.session_state:
         st.session_state.logs = []
@@ -133,10 +132,11 @@ def generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes):
         buffer.seek(0)
         return buffer
 
-# ====================== INTERFACE ======================
+# ====================== INTERFACE SIMPLIFIÉE (Mobile Friendly) ======================
 st.title("🚗 Expert Auto IA")
 st.markdown("**Rapport d’expertise véhicule**")
-st.info("📱 **iPhone** : Utilise **Chrome** pour une meilleure compatibilité caméra")
+
+st.info("📱 Sur téléphone : Appuie sur **Uploader** → tu auras le choix **Appareil photo** ou **Galerie**")
 
 st.header("📸 Documents & Photos")
 cols = st.columns(4)
@@ -148,30 +148,18 @@ images_bytes = {}
 for i, (key, label) in enumerate(zip(keys, labels)):
     with cols[i]:
         st.subheader(label)
+        uploaded = st.file_uploader("Choisir ou prendre photo", type=["jpg","jpeg","png"], key=f"up_{key}")
         
-        col_u, col_c = st.columns(2)
-        with col_u:
-            uploaded = st.file_uploader("📤 Uploader", type=["jpg","jpeg","png"], key=f"upload_{key}")
-        with col_c:
-            camera = st.camera_input("📸 Caméra", key=f"camera_{key}")
-        
-        current_bytes = None
-        if camera is not None:
-            current_bytes = camera.getvalue()
-            st.success("✅ Photo prise avec caméra")
-        elif uploaded is not None:
+        if uploaded is not None:
             current_bytes = uploaded.getvalue()
-            st.success("✅ Photo uploadée")
-        
-        if current_bytes:
-            st.image(current_bytes, width=200)
+            st.image(current_bytes, width=220)
             images_bytes[key] = current_bytes
 
-st.header("📝 Informations Complémentaires")
+st.header("📝 Informations")
 col1, col2 = st.columns(2)
 with col1:
     nom = st.text_input("Nom propriétaire", "")
-    num_rapport = st.text_input("Numéro rapport", "001")
+    num_rapport = st.text_input("N° Rapport", "001")
     lieu = st.text_input("Lieu", "TISSEMSILT")
 with col2:
     date_exp = st.text_input("Date expertise", "26/04/2026")
@@ -187,25 +175,25 @@ infos = {
     "carburant": carburant
 }
 
-if st.button("🚀 ANALYSER AVEC IA ET GÉNÉRER RAPPORT", type="primary", use_container_width=True):
+if st.button("🚀 ANALYSER & GÉNÉRER RAPPORT", type="primary", use_container_width=True):
     if not images_bytes.get("carte"):
-        st.error("❌ La Carte Grise est obligatoire !")
+        st.error("❌ Carte grise obligatoire !")
     else:
-        with st.spinner("Analyse en cours avec GPT-4o-mini..."):
+        with st.spinner("Analyse IA en cours..."):
             cg_data = extract_carte_grise_protocol(images_bytes["carte"])
-            vin_complet = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
-            poids_plaque = extract_plaque_poids(images_bytes.get("plaque"))
+            vin = extract_vin_protocol(images_bytes.get("vin"), images_bytes.get("plaque"))
+            poids = extract_plaque_poids(images_bytes.get("plaque"))
             
-            buffer = generate_report(cg_data, vin_complet, poids_plaque, infos, images_bytes)
+            buffer = generate_report(cg_data, vin, poids, infos, images_bytes)
 
         if buffer:
             st.success("✅ Rapport généré avec succès !")
             st.download_button(
-                label="📥 Télécharger le rapport Word",
+                "📥 Télécharger le rapport Word",
                 data=buffer,
                 file_name=f"rapport_{num_rapport}.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 use_container_width=True
             )
 
-st.caption("💡 Sur iPhone : essaie avec Google Chrome si la caméra ne fonctionne pas")
+st.caption("Version optimisée mobile - Appuie sur Uploader pour choisir Appareil Photo ou Galerie")
